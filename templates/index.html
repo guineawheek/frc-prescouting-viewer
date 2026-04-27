@@ -267,17 +267,18 @@ body.dragging-v, body.dragging-v * { cursor: row-resize !important; user-select:
 
 /* Team cells */
 .tc {
-  text-align: center;
-  font-weight: 600;
+  text-align: left;
   font-variant-numeric: tabular-nums;
-  font-size: .78rem;
-  white-space: nowrap;
-  padding: 5px 4px;
+  padding: 4px 5px;
+  vertical-align: middle;
 }
 .tc.r  { background: #fff5f5; color: #b71c1c; }
 .tc.b  { background: #f3f7ff; color: #0d47a1; }
-.tc.hl.r { background: #ffcdd2; font-weight: 800; }
-.tc.hl.b { background: #bbdefb; font-weight: 800; }
+.tc.hl.r { background: #ffcdd2; }
+.tc.hl.b { background: #bbdefb; }
+.tc-num { font-weight: 700; font-size: .78rem; line-height: 1.2; white-space: nowrap; }
+.tc.hl .tc-num { font-weight: 800; }
+.tc-name { display: block; font-size: .68rem; opacity: .72; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.2; }
 
 /* ── Video panel ── */
 #video-panel {
@@ -342,6 +343,7 @@ let sortAsc = false;
 let selectedTeam = null;
 let selectedMatchKey = null;
 const eventNameCache = {};
+const teamNameCache = {};
 
 const eventInput    = document.getElementById('event-input');
 const btnLoad       = document.getElementById('btn-load');
@@ -368,6 +370,27 @@ function epaColor(epa, min, max) {
   if (epa == null) return '#bdbdbd';
   const t = Math.max(0, Math.min(1, (epa - min) / (max - min || 1)));
   return `hsl(${Math.round(t * 120)}, 68%, 38%)`;
+}
+
+// First Monday of the FRC competition season per year (Week 1 anchor).
+// Week N = floor((event_start - anchor) / 7 days) + 1
+const FRC_SEASON_START = {
+  2026: '2026-03-02',
+  2025: '2025-02-24',
+  2024: '2024-02-19',
+  2023: '2023-02-27',
+  2022: '2022-03-14',
+};
+
+function eventWeekLabel(startDate) {
+  if (!startDate) return '';
+  const year = startDate.slice(0, 4);
+  const anchor = FRC_SEASON_START[year];
+  if (!anchor) return '';
+  const ms = new Date(startDate) - new Date(anchor);
+  const week = Math.floor(ms / (7 * 864e5)) + 1;
+  if (week < 1 || week > 8) return '';
+  return `Week ${week}`;
 }
 
 const LEVEL_ORDER = { qm: 0, ef: 1, qf: 2, sf: 3, f: 4 };
@@ -418,6 +441,22 @@ async function fetchEventNames(keys) {
   } catch (_) {}
 }
 
+// ── Team name cache ────────────────────────────────────────────────────────
+
+const teamEventsFetched = new Set();
+
+async function fetchTeamNames(eventKeys) {
+  const needed = eventKeys.filter(k => !teamEventsFetched.has(k));
+  if (!needed.length) return;
+  try {
+    const r = await fetch('/api/teams/names?events=' + needed.join(','));
+    if (r.ok) {
+      Object.assign(teamNameCache, await r.json());
+      needed.forEach(k => teamEventsFetched.add(k));
+    }
+  } catch (_) {}
+}
+
 // ── Load event ─────────────────────────────────────────────────────────────
 
 async function loadEvent() {
@@ -439,6 +478,7 @@ async function loadEvent() {
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || r.statusText);
     teamsData = data;
+    setLastEvent(code);
     teamsHeader.textContent = `Teams (${teamsData.length})`;
     btnRefresh.disabled = false;
     const withEpa = teamsData.filter(t => t.epa != null).length;
@@ -449,6 +489,16 @@ async function loadEvent() {
     setStatus('Failed to load teams', true);
   }
 }
+
+function getLastEvent() {
+  return document.cookie.split('; ').find(c => c.startsWith('last_event='))?.split('=')[1] ?? '';
+}
+function setLastEvent(code) {
+  document.cookie = `last_event=${code}; path=/; max-age=${60 * 60 * 24 * 365}`;
+}
+
+const savedEvent = getLastEvent();
+if (savedEvent) eventInput.value = savedEvent;
 
 btnLoad.addEventListener('click', loadEvent);
 eventInput.addEventListener('keydown', e => { if (e.key === 'Enter') loadEvent(); });
@@ -537,9 +587,8 @@ async function selectTeam(teamNumber) {
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || r.statusText);
     allMatches = data;
-    // Fetch event names for all events before rendering
     const keys = [...new Set(data.map(m => m.event_key))];
-    await fetchEventNames(keys);
+    await Promise.all([fetchEventNames(keys), fetchTeamNames(keys)]);
     renderMatches(teamNumber);
   } catch (e) {
     matchesScroll.innerHTML = `<div class="error-msg">Error: ${e.message}</div>`;
@@ -554,7 +603,9 @@ function teamCells(keys, alliance, selectedFrc) {
     if (!k) return `<td class="tc ${alliance}"></td>`;
     const n = k.replace('frc', '');
     const hl = k === selectedFrc ? ' hl' : '';
-    return `<td class="tc ${alliance}${hl}">${n}</td>`;
+    const name = teamNameCache[n];
+    const sub = name ? `<div class="tc-name">${name}</div>` : '';
+    return `<td class="tc ${alliance}${hl}"><div class="tc-num">${n}</div>${sub}</td>`;
   }).join('');
 }
 
@@ -589,10 +640,12 @@ function renderMatches(teamNumber) {
     });
 
     const isCurrent = eventKey === currentEvent;
-    const eventName = eventNameCache[eventKey] || eventKey;
+    const eventInfo = eventNameCache[eventKey];
+    const eventName = eventInfo?.name || eventKey;
+    const weekLabel = eventWeekLabel(eventInfo?.start_date);
 
     h += `<div class="event-group">
-      <div class="event-group-title">${eventName}${isCurrent ? ' · current' : ''}</div>
+      <div class="event-group-title">${weekLabel ? weekLabel + ' · ' : ''}${eventName}${isCurrent ? ' · current' : ''}</div>
       <table class="match-table">
         <thead><tr>
           <th class="th-match"></th>

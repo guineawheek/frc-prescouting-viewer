@@ -1,7 +1,7 @@
 import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from flask import Flask, jsonify, render_template, request
 import requests
 
@@ -38,7 +38,34 @@ def init_db():
             """
             CREATE TABLE IF NOT EXISTS event_name_cache (
                 event_code TEXT PRIMARY KEY,
-                name TEXT NOT NULL
+                name TEXT NOT NULL,
+                week INTEGER,
+                start_date TEXT
+            )
+            """
+        )
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(event_name_cache)")}
+        if "week" not in cols:
+            conn.execute("ALTER TABLE event_name_cache ADD COLUMN week INTEGER")
+            conn.execute("DELETE FROM event_name_cache")
+        if "start_date" not in cols:
+            conn.execute("ALTER TABLE event_name_cache ADD COLUMN start_date TEXT")
+            conn.execute("DELETE FROM event_name_cache")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS team_name_cache (
+                team_number INTEGER PRIMARY KEY,
+                nickname TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS event_teams (
+                event_code TEXT NOT NULL,
+                team_number INTEGER NOT NULL,
+                PRIMARY KEY (event_code, team_number)
             )
             """
         )
@@ -91,7 +118,7 @@ def _fetch_and_cache_epa(event_code):
 
     epa_map = {}
     rows = []
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     for item in data:
         team = item.get("team")
         epa = _extract_epa(item.get("epa"))
@@ -174,10 +201,10 @@ def get_event_names():
 
     with get_db() as conn:
         rows = conn.execute(
-            f"SELECT event_code, name FROM event_name_cache WHERE event_code IN ({','.join('?'*len(keys))})",
+            f"SELECT event_code, name, week, start_date FROM event_name_cache WHERE event_code IN ({','.join('?'*len(keys))})",
             keys,
         ).fetchall()
-    result = {r["event_code"]: r["name"] for r in rows}
+    result = {r["event_code"]: {"name": r["name"], "week": r["week"], "start_date": r["start_date"]} for r in rows}
 
     missing = [k for k in keys if k not in result]
     if not missing:
@@ -186,21 +213,83 @@ def get_event_names():
     def fetch_name(key):
         try:
             event = tba_get(f"/event/{key}/simple")
-            return key, event.get("name", key)
+            return key, event.get("name", key), event.get("week"), event.get("start_date")
         except Exception:
-            return key, key
+            return key, key, None, None
 
     with ThreadPoolExecutor(max_workers=min(len(missing), 6)) as ex:
-        fetched = dict(ex.map(fetch_name, missing))
+        fetched_rows = list(ex.map(fetch_name, missing))
 
     with get_db() as conn:
         conn.executemany(
-            "INSERT OR REPLACE INTO event_name_cache (event_code, name) VALUES (?, ?)",
-            fetched.items(),
+            "INSERT OR REPLACE INTO event_name_cache (event_code, name, week, start_date) VALUES (?, ?, ?, ?)",
+            fetched_rows,
         )
 
-    result.update(fetched)
+    for key, name, week, start_date in fetched_rows:
+        result[key] = {"name": name, "week": week, "start_date": start_date}
     return jsonify(result)
+
+
+@app.route("/api/teams/names")
+def get_team_names():
+    event_keys = [k.strip() for k in request.args.get("events", "").split(",") if k.strip()][:20]
+    if not event_keys:
+        return jsonify({})
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+
+    # An event is fresh if it has at least one team cached within the TTL window.
+    # Events with no mapping or only stale entries need a bulk fetch.
+    with get_db() as conn:
+        fresh = set()
+        for ek in event_keys:
+            row = conn.execute(
+                """SELECT 1 FROM event_teams et
+                   JOIN team_name_cache tnc ON et.team_number = tnc.team_number
+                   WHERE et.event_code = ? AND tnc.updated_at >= ? LIMIT 1""",
+                (ek, cutoff),
+            ).fetchone()
+            if row:
+                fresh.add(ek)
+
+    stale = [ek for ek in event_keys if ek not in fresh]
+
+    if stale:
+        def fetch_event(ek):
+            try:
+                return ek, tba_get(f"/event/{ek}/teams/simple")
+            except Exception:
+                return ek, []
+
+        with ThreadPoolExecutor(max_workers=min(len(stale), 6)) as ex:
+            fetched = list(ex.map(fetch_event, stale))
+
+        now = datetime.now(timezone.utc).isoformat()
+        with get_db() as conn:
+            for ek, teams in fetched:
+                if not teams:
+                    continue
+                conn.executemany(
+                    "INSERT OR REPLACE INTO team_name_cache (team_number, nickname, updated_at) VALUES (?, ?, ?)",
+                    [(t["team_number"], t.get("nickname") or f"Team {t['team_number']}", now) for t in teams],
+                )
+                conn.executemany(
+                    "INSERT OR IGNORE INTO event_teams (event_code, team_number) VALUES (?, ?)",
+                    [(ek, t["team_number"]) for t in teams],
+                )
+
+    placeholders = ",".join("?" * len(event_keys))
+    with get_db() as conn:
+        rows = conn.execute(
+            f"""SELECT tnc.team_number, tnc.nickname
+                FROM event_teams et
+                JOIN team_name_cache tnc ON et.team_number = tnc.team_number
+                WHERE et.event_code IN ({placeholders})""",
+            event_keys,
+        ).fetchall()
+
+    return jsonify({r["team_number"]: r["nickname"] for r in rows})
 
 
 if __name__ == "__main__":
