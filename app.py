@@ -1,7 +1,8 @@
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 import requests
 
 app = Flask(__name__)
@@ -30,6 +31,14 @@ def init_db():
                 epa REAL,
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY (event_code, team_number)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS event_name_cache (
+                event_code TEXT PRIMARY KEY,
+                name TEXT NOT NULL
             )
             """
         )
@@ -155,6 +164,43 @@ def get_team_matches(team_number, year):
     except Exception as e:
         return jsonify({"error": str(e)}), 502
     return jsonify(matches)
+
+
+@app.route("/api/events/names")
+def get_event_names():
+    keys = [k.strip() for k in request.args.get("keys", "").split(",") if k.strip()][:20]
+    if not keys:
+        return jsonify({})
+
+    with get_db() as conn:
+        rows = conn.execute(
+            f"SELECT event_code, name FROM event_name_cache WHERE event_code IN ({','.join('?'*len(keys))})",
+            keys,
+        ).fetchall()
+    result = {r["event_code"]: r["name"] for r in rows}
+
+    missing = [k for k in keys if k not in result]
+    if not missing:
+        return jsonify(result)
+
+    def fetch_name(key):
+        try:
+            event = tba_get(f"/event/{key}/simple")
+            return key, event.get("name", key)
+        except Exception:
+            return key, key
+
+    with ThreadPoolExecutor(max_workers=min(len(missing), 6)) as ex:
+        fetched = dict(ex.map(fetch_name, missing))
+
+    with get_db() as conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO event_name_cache (event_code, name) VALUES (?, ?)",
+            fetched.items(),
+        )
+
+    result.update(fetched)
+    return jsonify(result)
 
 
 if __name__ == "__main__":
