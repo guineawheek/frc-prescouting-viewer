@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FRC Viewer</title>
+<style>
+:root {
+  --primary: #1565c0;
+  --primary-dark: #0d47a1;
+  --red: #c62828;
+  --blue: #1565c0;
+  --border: #e0e0e0;
+  --bg: #f4f6f9;
+  --surface: #ffffff;
+  --text: #212121;
+  --text-dim: #757575;
+  --selected-bg: #e3f2fd;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Header ── */
+header {
+  background: var(--primary);
+  color: #fff;
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 2px 6px rgba(0,0,0,.25);
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+header h1 { font-size: 1.1rem; font-weight: 700; letter-spacing: .3px; margin-right: 4px; }
+
+#event-input {
+  padding: 5px 10px;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.88rem;
+  width: 160px;
+  outline: none;
+}
+
+header button {
+  padding: 5px 14px;
+  border-radius: 4px;
+  border: none;
+  font-size: 0.83rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity .15s;
+}
+header button:disabled { opacity: .4; cursor: default; }
+
+#btn-load { background: #fff; color: var(--primary); }
+#btn-load:hover:not(:disabled) { background: #e8f0fe; }
+
+#btn-refresh {
+  background: rgba(255,255,255,.15);
+  color: #fff;
+  border: 1px solid rgba(255,255,255,.4);
+}
+#btn-refresh:hover:not(:disabled) { background: rgba(255,255,255,.25); }
+
+#status {
+  margin-left: auto;
+  font-size: 0.78rem;
+  opacity: .9;
+  max-width: 260px;
+  text-align: right;
+}
+#status.error { color: #ffcdd2; }
+
+/* ── Main layout ── */
+.main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── Left panel ── */
+.left-panel {
+  width: 42%;
+  min-width: 300px;
+  max-width: 520px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.panel-header {
+  padding: 6px 12px;
+  background: #f5f5f5;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  flex-shrink: 0;
+}
+
+#teams-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Teams table */
+#teams-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.81rem;
+}
+
+#teams-table thead { position: sticky; top: 0; z-index: 2; }
+
+#teams-table th {
+  background: #eeeeee;
+  border-bottom: 2px solid var(--border);
+  padding: 6px 8px;
+  text-align: left;
+  font-size: 0.73rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+#teams-table th:hover { background: #e0e0e0; }
+#teams-table th.sorted { color: var(--primary); }
+#teams-table th .arrow { margin-left: 2px; font-size: .7rem; }
+
+#teams-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid #f0f0f0;
+  vertical-align: middle;
+}
+
+#teams-table tbody tr { cursor: pointer; }
+#teams-table tbody tr:hover td { background: #fafafa; }
+#teams-table tbody tr.active td { background: var(--selected-bg); }
+
+.col-num { width: 52px; }
+.col-team { }
+.col-loc { width: 130px; }
+.col-epa { width: 64px; text-align: right; }
+
+.team-num {
+  font-weight: 700;
+  color: var(--primary);
+  font-size: .84rem;
+}
+
+.team-name {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 170px;
+}
+
+.loc-text {
+  color: var(--text-dim);
+  font-size: .76rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.epa-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-size: .79rem;
+  font-weight: 700;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+  min-width: 48px;
+  text-align: center;
+}
+
+/* ── Right panel ── */
+.right-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+#matches-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  min-height: 0;
+}
+
+/* ── Match groups ── */
+.event-group { margin-bottom: 18px; }
+
+.event-group-title {
+  font-size: .73rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .6px;
+  color: var(--text-dim);
+  padding: 2px 0 5px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 5px;
+}
+
+/* ── Match card ── */
+.match-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  overflow: hidden;
+  transition: box-shadow .12s;
+}
+.match-card:hover { box-shadow: 0 2px 6px rgba(0,0,0,.1); }
+.match-card.active { box-shadow: 0 0 0 2px var(--primary); }
+
+.match-inner {
+  display: flex;
+  align-items: stretch;
+}
+
+.match-label {
+  flex-shrink: 0;
+  width: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f5f5f5;
+  border-right: 1px solid var(--border);
+  font-size: .68rem;
+  font-weight: 700;
+  text-align: center;
+  padding: 4px;
+  line-height: 1.3;
+  color: #555;
+}
+
+.alliances {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.alliance-row {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  min-width: 0;
+}
+.alliance-row.red {
+  border-left: 3px solid var(--red);
+  background: #fff9f9;
+  border-bottom: 1px solid #f0f0f0;
+}
+.alliance-row.blue {
+  border-left: 3px solid var(--blue);
+  background: #f7faff;
+}
+
+.team-pill {
+  font-size: .77rem;
+  font-weight: 500;
+  padding: 1px 4px;
+  border-radius: 2px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.team-pill.hl-red  { background: #ffcdd2; color: #b71c1c; font-weight: 800; }
+.team-pill.hl-blue { background: #bbdefb; color: #0d47a1; font-weight: 800; }
+
+.alliance-score {
+  margin-left: auto;
+  font-weight: 700;
+  font-size: .9rem;
+  font-variant-numeric: tabular-nums;
+  min-width: 36px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.alliance-row.red  .alliance-score { color: var(--red); }
+.alliance-row.blue .alliance-score { color: var(--blue); }
+.alliance-score.winner { font-size: 1rem; }
+
+.has-video .match-label::after {
+  content: '▶';
+  display: block;
+  font-size: .58rem;
+  opacity: .45;
+  margin-top: 3px;
+}
+
+/* ── Video panel ── */
+#video-panel {
+  flex-shrink: 0;
+  background: #111;
+  border-top: 3px solid var(--primary);
+  display: none;
+  padding: 0;
+}
+#video-panel.visible { display: flex; flex-direction: column; }
+
+#yt-embed {
+  width: 100%;
+  flex: 1;
+  border: none;
+  display: block;
+  min-height: 320px;
+  aspect-ratio: 16 / 9;
+  max-height: 45vh;
+}
+
+/* ── Placeholder / loading / error ── */
+.placeholder, .loading-msg, .error-msg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 120px;
+  font-size: .85rem;
+  color: var(--text-dim);
+}
+.error-msg { color: #c62828; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>FRC Viewer</h1>
+  <input id="event-input" type="text" placeholder="Event code (e.g. 2026gal)" autocomplete="off" spellcheck="false">
+  <button id="btn-load">Load</button>
+  <button id="btn-refresh" disabled>Refresh EPA</button>
+  <span id="status"></span>
+</header>
+
+<div class="main">
+  <div class="left-panel">
+    <div class="panel-header" id="teams-header">Teams</div>
+    <div id="teams-scroll">
+      <div class="placeholder">Enter an event code and click Load</div>
+    </div>
+  </div>
+
+  <div class="right-panel">
+    <div class="panel-header" id="matches-header">Matches</div>
+    <div id="matches-scroll">
+      <div class="placeholder">Select a team to view their matches</div>
+    </div>
+    <div id="video-panel">
+      <iframe id="yt-embed" allowfullscreen allow="autoplay; encrypted-media; picture-in-picture"></iframe>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+let currentEvent = '';
+let teamsData = [];
+let allMatches = [];
+let sortKey = 'epa';
+let sortAsc = false;
+let selectedTeam = null;
+let selectedMatchKey = null;
+
+const eventInput = document.getElementById('event-input');
+const btnLoad    = document.getElementById('btn-load');
+const btnRefresh = document.getElementById('btn-refresh');
+const statusEl   = document.getElementById('status');
+const teamsHeader   = document.getElementById('teams-header');
+const teamsScroll   = document.getElementById('teams-scroll');
+const matchesHeader = document.getElementById('matches-header');
+const matchesScroll = document.getElementById('matches-scroll');
+const videoPanel = document.getElementById('video-panel');
+const ytEmbed    = document.getElementById('yt-embed');
+
+// ── Utilities ──────────────────────────────────────────────────────────────
+
+function setStatus(msg, isError = false) {
+  statusEl.textContent = msg;
+  statusEl.className = isError ? 'error' : '';
+}
+
+function epaColor(epa, min, max) {
+  if (epa == null) return '#bdbdbd';
+  const range = max - min || 1;
+  const t = Math.max(0, Math.min(1, (epa - min) / range));
+  const hue = Math.round(t * 120); // 0=red, 60=yellow, 120=green
+  return `hsl(${hue}, 68%, 38%)`;
+}
+
+const LEVEL_ORDER = { qm: 0, ef: 1, qf: 2, sf: 3, f: 4 };
+
+function matchSortKey(m) {
+  return [LEVEL_ORDER[m.comp_level] ?? 9, m.set_number, m.match_number];
+}
+
+function matchLabel(m) {
+  const labels = { qm: 'Qual', ef: 'Eighths', qf: 'Quarters', sf: 'Semis', f: 'Final' };
+  const base = labels[m.comp_level] || m.comp_level.toUpperCase();
+  if (m.comp_level === 'qm') return base + ' ' + m.match_number;
+  return base + '\n' + m.set_number + '-' + m.match_number;
+}
+
+function scoreDisplay(score) {
+  return (score == null || score === -1) ? '—' : score;
+}
+
+// ── Load event ─────────────────────────────────────────────────────────────
+
+async function loadEvent() {
+  const code = eventInput.value.trim().toLowerCase();
+  if (!code) return;
+  currentEvent = code;
+  selectedTeam = null;
+  selectedMatchKey = null;
+  teamsData = [];
+  videoPanel.classList.remove('visible');
+  matchesScroll.innerHTML = '<div class="placeholder">Select a team to view their matches</div>';
+  matchesHeader.textContent = 'Matches';
+  teamsScroll.innerHTML = '<div class="loading-msg">Loading teams…</div>';
+  btnRefresh.disabled = true;
+  setStatus('Loading teams…');
+
+  try {
+    const r = await fetch(`/api/event/${code}/teams`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    teamsData = data;
+    teamsHeader.textContent = `Teams (${teamsData.length})`;
+    btnRefresh.disabled = false;
+    const withEpa = teamsData.filter(t => t.epa != null).length;
+    setStatus(`${teamsData.length} teams · EPA: ${withEpa > 0 ? `${withEpa} cached` : 'unavailable'}`);
+    renderTeams();
+  } catch (e) {
+    teamsScroll.innerHTML = `<div class="error-msg">Error: ${e.message}</div>`;
+    setStatus('Failed to load teams', true);
+  }
+}
+
+btnLoad.addEventListener('click', loadEvent);
+eventInput.addEventListener('keydown', e => { if (e.key === 'Enter') loadEvent(); });
+
+// ── Render teams table ──────────────────────────────────────────────────────
+
+function renderTeams() {
+  const sorted = [...teamsData].sort((a, b) => {
+    let av = a[sortKey], bv = b[sortKey];
+    // Nulls always last
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === 'string') return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+    return sortAsc ? av - bv : bv - av;
+  });
+
+  const epas = teamsData.map(t => t.epa).filter(e => e != null);
+  const minEpa = epas.length ? Math.min(...epas) : 0;
+  const maxEpa = epas.length ? Math.max(...epas) : 1;
+
+  const cols = [
+    { key: 'team_number', label: '#' },
+    { key: 'nickname',    label: 'Team' },
+    { key: 'location',   label: 'Location' },
+    { key: 'epa',        label: 'EPA' },
+  ];
+
+  let h = '<table id="teams-table"><thead><tr>';
+  for (const c of cols) {
+    const active = sortKey === c.key;
+    const arrow = active ? (sortAsc ? '↑' : '↓') : '';
+    h += `<th class="${active ? 'sorted' : ''} col-${c.key}" data-key="${c.key}">${c.label}<span class="arrow">${arrow}</span></th>`;
+  }
+  h += '</tr></thead><tbody>';
+
+  for (const t of sorted) {
+    const active = selectedTeam === t.team_number;
+    const color = epaColor(t.epa, minEpa, maxEpa);
+    const epaStr = t.epa != null ? t.epa.toFixed(1) : '—';
+    h += `<tr class="${active ? 'active' : ''}" data-team="${t.team_number}">
+      <td class="col-num"><span class="team-num">${t.team_number}</span></td>
+      <td class="col-team"><div class="team-name" title="${t.nickname}">${t.nickname}</div></td>
+      <td class="col-loc"><div class="loc-text" title="${t.location}">${t.location || '—'}</div></td>
+      <td class="col-epa"><span class="epa-badge" style="background:${color}">${epaStr}</span></td>
+    </tr>`;
+  }
+  h += '</tbody></table>';
+
+  teamsScroll.innerHTML = h;
+
+  teamsScroll.querySelectorAll('#teams-table th').forEach(th => {
+    th.addEventListener('click', () => {
+      const key = th.dataset.key;
+      if (sortKey === key) { sortAsc = !sortAsc; }
+      else { sortKey = key; sortAsc = (key !== 'epa'); }
+      renderTeams();
+    });
+  });
+
+  teamsScroll.querySelectorAll('#teams-table tbody tr').forEach(tr => {
+    tr.addEventListener('click', () => selectTeam(parseInt(tr.dataset.team)));
+  });
+
+  // Scroll selected team into view
+  if (selectedTeam != null) {
+    const activeRow = teamsScroll.querySelector('tr.active');
+    if (activeRow) activeRow.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+// ── Select team ─────────────────────────────────────────────────────────────
+
+async function selectTeam(teamNumber) {
+  if (selectedTeam === teamNumber) return;
+  selectedTeam = teamNumber;
+  selectedMatchKey = null;
+  videoPanel.classList.remove('visible');
+
+  // Update table highlight without full re-render
+  teamsScroll.querySelectorAll('#teams-table tbody tr').forEach(tr => {
+    tr.classList.toggle('active', parseInt(tr.dataset.team) === teamNumber);
+  });
+
+  const team = teamsData.find(t => t.team_number === teamNumber);
+  matchesHeader.textContent = `Matches — ${team?.nickname ?? teamNumber} (${teamNumber})`;
+  matchesScroll.innerHTML = '<div class="loading-msg">Loading matches…</div>';
+
+  const year = (currentEvent.match(/^(\d{4})/) || [, new Date().getFullYear()])[1];
+
+  try {
+    const r = await fetch(`/api/team/${teamNumber}/matches/${year}`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    allMatches = data;
+    renderMatches(teamNumber);
+  } catch (e) {
+    matchesScroll.innerHTML = `<div class="error-msg">Error: ${e.message}</div>`;
+  }
+}
+
+// ── Render matches ──────────────────────────────────────────────────────────
+
+function renderMatches(teamNumber) {
+  if (!allMatches.length) {
+    matchesScroll.innerHTML = '<div class="placeholder">No matches found for this year</div>';
+    return;
+  }
+
+  // Group by event key, preserving sorted order within each event
+  const groups = new Map();
+  for (const m of allMatches) {
+    if (!groups.has(m.event_key)) groups.set(m.event_key, []);
+    groups.get(m.event_key).push(m);
+  }
+
+  // Sort events: current event first, then by earliest match time
+  const sortedEvents = [...groups.keys()].sort((a, b) => {
+    if (a === currentEvent) return -1;
+    if (b === currentEvent) return 1;
+    const aFirst = groups.get(a)[0]?.time ?? 0;
+    const bFirst = groups.get(b)[0]?.time ?? 0;
+    return bFirst - aFirst; // most recent first
+  });
+
+  const teamFrc = `frc${teamNumber}`;
+  let h = '';
+
+  for (const eventKey of sortedEvents) {
+    const matches = groups.get(eventKey).sort((a, b) => {
+      const ka = matchSortKey(a), kb = matchSortKey(b);
+      for (let i = 0; i < ka.length; i++) {
+        if (ka[i] !== kb[i]) return ka[i] - kb[i];
+      }
+      return 0;
+    });
+
+    const isCurrent = eventKey === currentEvent;
+    h += `<div class="event-group">
+      <div class="event-group-title">${eventKey}${isCurrent ? ' · current event' : ''}</div>`;
+
+    for (const m of matches) {
+      const red  = m.alliances?.red?.team_keys  ?? [];
+      const blue = m.alliances?.blue?.team_keys ?? [];
+      const rs = m.alliances?.red?.score;
+      const bs = m.alliances?.blue?.score;
+      const onRed  = red.includes(teamFrc);
+      const onBlue = blue.includes(teamFrc);
+      const winner = m.winning_alliance;
+      const hasVideo = m.videos?.some(v => v.type === 'youtube');
+      const label = matchLabel(m).replace('\n', '<br>');
+      const isActive = m.key === selectedMatchKey;
+
+      const redTeams = red.map(k => {
+        const n = k.replace('frc', '');
+        const hl = (onRed && k === teamFrc) ? 'hl-red' : '';
+        return `<span class="team-pill ${hl}">${n}</span>`;
+      }).join('');
+
+      const blueTeams = blue.map(k => {
+        const n = k.replace('frc', '');
+        const hl = (onBlue && k === teamFrc) ? 'hl-blue' : '';
+        return `<span class="team-pill ${hl}">${n}</span>`;
+      }).join('');
+
+      const rsWinner = winner === 'red' ? ' winner' : '';
+      const bsWinner = winner === 'blue' ? ' winner' : '';
+
+      h += `<div class="match-card${isActive ? ' active' : ''}${hasVideo ? ' has-video' : ''}" data-key="${m.key}">
+        <div class="match-inner">
+          <div class="match-label">${label}</div>
+          <div class="alliances">
+            <div class="alliance-row red">${redTeams}<span class="alliance-score${rsWinner}">${scoreDisplay(rs)}</span></div>
+            <div class="alliance-row blue">${blueTeams}<span class="alliance-score${bsWinner}">${scoreDisplay(bs)}</span></div>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    h += '</div>';
+  }
+
+  matchesScroll.innerHTML = h;
+
+  matchesScroll.querySelectorAll('.match-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const key = card.dataset.key;
+      const match = allMatches.find(m => m.key === key);
+      if (match) selectMatch(match);
+    });
+  });
+}
+
+// ── Select match ─────────────────────────────────────────────────────────────
+
+function selectMatch(match) {
+  selectedMatchKey = match.key;
+
+  matchesScroll.querySelectorAll('.match-card').forEach(c => {
+    c.classList.toggle('active', c.dataset.key === match.key);
+  });
+
+  const yt = match.videos?.find(v => v.type === 'youtube');
+  if (yt) {
+    ytEmbed.src = `https://www.youtube.com/embed/${yt.key}`;
+    videoPanel.classList.add('visible');
+  } else {
+    videoPanel.classList.remove('visible');
+    ytEmbed.src = '';
+  }
+}
+
+// ── Refresh EPA ──────────────────────────────────────────────────────────────
+
+btnRefresh.addEventListener('click', async () => {
+  if (!currentEvent) return;
+  btnRefresh.disabled = true;
+  setStatus('Refreshing EPA from Statbotics…');
+  try {
+    const r = await fetch(`/api/event/${currentEvent}/refresh`, { method: 'POST' });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+    setStatus(`EPA refreshed — ${data.updated} teams updated`);
+
+    // Re-fetch team list to pick up new EPA values
+    const r2 = await fetch(`/api/event/${currentEvent}/teams`);
+    const data2 = await r2.json();
+    if (r2.ok) {
+      teamsData = data2;
+      renderTeams();
+    }
+  } catch (e) {
+    setStatus(`Refresh failed: ${e.message}`, true);
+  } finally {
+    btnRefresh.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
