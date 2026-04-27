@@ -228,6 +228,7 @@ body.dragging-v, body.dragging-v * { cursor: row-resize !important; user-select:
   border-right: 1px solid var(--border);
   border-left: 3px solid transparent;
 }
+.td-match:hover { text-decoration: underline; }
 .td-match.has-video::after { content: ' ▶'; font-size: .5rem; opacity: .4; }
 
 /* Score cell */
@@ -697,6 +698,10 @@ function renderMatches(teamNumber) {
     tr.addEventListener('click', () => {
       const match = allMatches.find(m => m.key === tr.dataset.key);
       if (match) selectMatch(match);
+    });
+    tr.querySelector('.td-match').addEventListener('click', e => {
+      e.stopPropagation();
+      window.open(`https://www.thebluealliance.com/match/${tr.dataset.key}`, '_blank');
     });
   });
 }
